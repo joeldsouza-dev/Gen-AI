@@ -1,0 +1,69 @@
+"""
+The router — where everything else in this project gets wired together.
+By the time you write this file, rate_limiter.py and circuit_breaker.py
+should already be implemented and tested in isolation.
+
+Responsibilities of `route_request()`:
+  1. Check the rate limiter for this team_id. If not allowed -> raise/return
+     a 429-equivalent immediately. Don't even look at providers yet.
+  2. Build a fallback chain: [preferred_provider (if set), then the rest in
+     some sensible default order, e.g. NVIDIA_NIM -> OPENROUTER -> OLLAMA].
+  3. For each provider in the chain, in order:
+       a. Check that provider's circuit breaker via `allow_request()`.
+          If False, skip it (don't even try) and move to the next provider.
+       b. If True, call `provider.call(request)`.
+       c. On success: call `breaker.record_success()`, return the
+          GatewayResponse (set `was_fallback=True` if this wasn't the first
+          provider tried).
+       d. On ProviderError: call `breaker.record_failure()`. If
+          `error.retryable` is False, or you've already retried this
+          provider once, move to the next provider in the chain. If
+          `error.retryable` is True and you haven't retried yet, you may
+          retry the SAME provider once with a short backoff before moving
+          on (this is the "retry before fallback" step from the project
+          spec — keep it simple, e.g. one retry with a fixed short delay).
+  4. If every provider in the chain fails, raise a clear error that the
+     API layer can turn into a 502/503 response — don't let a provider's
+     raw exception leak up to the caller.
+
+Also worth logging/tracing at each step (this is what your OpenTelemetry
+spans should wrap): which provider was tried, whether the breaker allowed
+it, whether it succeeded, and total time spent finding a working provider.
+That trace is literally the demo for this project — "watch it fail over."
+
+TODO(you): implement `GatewayRouter` below. The pieces (providers, rate
+limiter, circuit breakers) are all built already at this point — this file
+is about getting the control flow and error handling right, which is its
+own real skill (this is the same shape of problem as your Razorpay webhook
+retry/reconciliation logic, if that's a useful anchor).
+"""
+
+from typing import Dict, List
+
+from app.core.circuit_breaker import CircuitBreaker
+from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName
+from app.core.rate_limiter import InMemoryTokenBucket
+from app.providers.base import BaseProvider
+
+
+class GatewayRouter:
+    def __init__(
+        self,
+        providers: Dict[ProviderName, BaseProvider],
+        circuit_breakers: Dict[ProviderName, CircuitBreaker],
+        rate_limiter,  # your bucket implementation, keyed per team_id
+        default_chain: List[ProviderName],
+    ):
+        self.providers = providers
+        self.circuit_breakers = circuit_breakers
+        self.rate_limiter = rate_limiter
+        self.default_chain = default_chain
+
+    async def route_request(self, request: GatewayRequest) -> GatewayResponse:
+        # TODO(you): implement the full flow described in the docstring above.
+        raise NotImplementedError("Implement GatewayRouter.route_request()")
+
+    def _build_chain(self, request: GatewayRequest) -> List[ProviderName]:
+        """Put the preferred provider first (if set), then the rest of the default chain."""
+        # TODO(you): implement.
+        raise NotImplementedError("Implement GatewayRouter._build_chain()")

@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Uncomment once you get to the observability step (README step 7+).
+  # Not needed for the first several build steps — add it when the
+  # rate limiter / circuit breaker are working and you want to *see*
+  # what's happening across providers.
+  #
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   volumes:
+  #     - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+  #   ports:
+  #     - "9090:9090"
+  #
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - prometheus
