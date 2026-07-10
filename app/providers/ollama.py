@@ -44,10 +44,67 @@ class OllamaProvider(BaseProvider):
         self.model = settings.ollama_model
 
     async def call(self, request: GatewayRequest) -> GatewayResponse:
+        messages=[]
+        if request.system_prompt:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": request.system_prompt,
+                }
+            )
+
+        messages.append(
+            {
+                "role": "user",
+                "content": request.prompt,
+            }
+        )
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": request.temperature,
+                "num_predict": request.max_tokens,
+            },
+        }
+        print(payload)
+        start_time = time.perf_counter()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{self.base_url}/api/chat", json=payload, timeout=30.0)
+
+    
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        print("OLLAMA RESPONSE:")
+        print(data)
+
+        return GatewayResponse(
+            text=data["message"]["content"],
+            provider_used=self.name,
+            model_used=data["model"],
+            input_tokens=data["prompt_eval_count"],
+            output_tokens=data["eval_count"],
+            latency_ms=latency_ms,
+        )
+
         # TODO(you): implement. See docstring above — note the different
-        # request/response shape compared to NVIDIA NIM / OpenRouter.
-        raise NotImplementedError("Implement OllamaProvider.call()")
+            # request/response shape compared to NVIDIA NIM / OpenRouter.
+    
 
     async def health_check(self) -> bool:
         # TODO(you): implement, e.g. GET {base_url}/api/tags
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.base_url}/api/tags", timeout=5.0)
+                response.raise_for_status()
+                return True
+        except Exception as e:
+            print(f"Health check failed: {e}")
+            return False
         raise NotImplementedError("Implement OllamaProvider.health_check()")
