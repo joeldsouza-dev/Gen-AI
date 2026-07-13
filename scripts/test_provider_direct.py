@@ -7,7 +7,7 @@ Prerequisites: `ollama serve` running, `ollama pull llama3.1` done.
 import asyncio
 from app.core.models import GatewayRequest
 from app.providers.ollama import OllamaProvider
-
+from app.core.models import GatewayRequest, ProviderError
 
 async def main():
     provider = OllamaProvider()

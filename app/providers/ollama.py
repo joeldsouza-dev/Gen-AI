@@ -71,10 +71,24 @@ class OllamaProvider(BaseProvider):
         }
         print(payload)
         start_time = time.perf_counter()
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{self.base_url}/api/chat", json=payload, timeout=30.0)
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload, timeout=30.0)
+            response.raise_for_status()
 
-    
+
+        except httpx.TimeoutException as exc:
+            raise ProviderError(f"Error calling Ollama API: {exc}", retryable=True) from exc
+        
+
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            raise ProviderError(f"Ollama returned HTTP {status_code}: {exc.response.text}",retryable=status_code >= 500,) from exc
+        
+
+        except httpx.RequestError as exc:
+            raise ProviderError(f"Error calling Ollama API: {exc}", retryable=True) from exc
+
         latency_ms = (time.perf_counter() - start_time) * 1000
 
         response.raise_for_status()
@@ -84,14 +98,16 @@ class OllamaProvider(BaseProvider):
         print("OLLAMA RESPONSE:")
         print(data)
 
-        return GatewayResponse(
+        try :return GatewayResponse(
             text=data["message"]["content"],
             provider_used=self.name,
             model_used=data["model"],
             input_tokens=data["prompt_eval_count"],
             output_tokens=data["eval_count"],
             latency_ms=latency_ms,
-        )
+            )
+        except(KeyError, ValueError) as exc:
+            raise ProviderError(f"Unexpected response format from Ollama API: {data}", retryable=False) from exc
 
         # TODO(you): implement. See docstring above — note the different
             # request/response shape compared to NVIDIA NIM / OpenRouter.
