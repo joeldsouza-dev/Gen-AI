@@ -12,7 +12,14 @@ from app.core.rate_limiter import InMemoryTokenBucket
 
 
 def test_in_memory_bucket_allows_up_to_capacity():
-    bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=0)  # no refill, isolate the "allow" logic
+    bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=0)
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+
+    assert bucket.allow() is False  # no refill, isolate the "allow" logic
     # TODO(you): assert that exactly 5 calls to bucket.allow() return True,
     # and the 6th returns False.
 
@@ -23,6 +30,14 @@ def test_in_memory_bucket_refills_over_time():
     # sleep ~1.1 seconds (time.sleep), then confirm allow() succeeds again.
     # (Yes, a real sleep in a test is a bit slow — that's fine for this one,
     # it's testing real elapsed-time behavior.)
+    for _ in range(5):
+        assert bucket.allow() is True
+
+    assert bucket.allow() is False
+
+    time.sleep(1.1)
+
+    assert bucket.allow() is True
 
 
 @pytest.mark.asyncio

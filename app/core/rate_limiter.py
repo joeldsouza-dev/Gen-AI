@@ -44,7 +44,8 @@ STAGE 2 — port to Redis, so the limiter works across multiple gateway
 """
 
 import time
-
+import asyncio
+import pytest
 
 class InMemoryTokenBucket:
     """Stage 1: implement this fully before touching Redis."""
@@ -52,6 +53,8 @@ class InMemoryTokenBucket:
     def __init__(self, capacity: int, refill_rate_per_second: float):
         self.capacity = capacity
         self.refill_rate = refill_rate_per_second
+        self.tokens = capacity
+        self.last_refill_time = time.monotonic()
         # TODO(you): what state do you need to track? (hint: current token
         # count, and the last time you computed a refill)
 
@@ -62,7 +65,37 @@ class InMemoryTokenBucket:
         """
         # TODO(you): implement the refill-then-check-then-deduct logic
         # described in the module docstring.
+        current_time = time.monotonic()
+        elapsed_time = current_time - self.last_refill_time
+        refill_amount = elapsed_time * self.refill_rate
+        self.tokens = min(self.capacity, self.tokens + refill_amount)  
+        self.last_refill_time = current_time
+
+        if self.tokens >= tokens_requested:
+            self.tokens -= tokens_requested
+            return True
+        else:
+            return False
         raise NotImplementedError("Implement InMemoryTokenBucket.allow()")
+    @pytest.mark.asyncio
+    async def test_concurrent_load_respects_limit():
+        bucket = InMemoryTokenBucket(
+            capacity=20,
+            refill_rate_per_second=0,
+        )
+
+        async def make_request():
+            return bucket.allow()
+
+        requests = [
+            make_request()
+            for _ in range(50)
+        ]
+
+        results = await asyncio.gather(*requests)
+
+        assert sum(results) == 20
+    
 
 
 class RedisTokenBucket:
