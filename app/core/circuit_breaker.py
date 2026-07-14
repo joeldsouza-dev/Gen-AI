@@ -50,18 +50,36 @@ class CircuitBreaker:
     def __init__(self, failure_threshold: int, cooldown_seconds: int):
         self.failure_threshold = failure_threshold
         self.cooldown_seconds = cooldown_seconds
+        self._state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.opened_at = None
+        self.half_open_request_in_flight = False
         # TODO(you): what state do you need? (hint: current CircuitState,
         # a failure counter, and a timestamp of when it last opened)
 
     def record_success(self) -> None:
         """Call this after a provider call succeeds."""
         # TODO(you): implement the CLOSED-reset and HALF_OPEN->CLOSED transitions.
-        raise NotImplementedError("Implement CircuitBreaker.record_success()")
+        self._state = CircuitState.CLOSED
+        self.half_open_request_in_flight = False
+        self.failure_count = 0
+        self.opened_at = None
 
     def record_failure(self) -> None:
         """Call this after a provider call fails."""
+        self.half_open_request_in_flight = False
         # TODO(you): implement the CLOSED->OPEN and HALF_OPEN->OPEN transitions.
-        raise NotImplementedError("Implement CircuitBreaker.record_failure()")
+        if self._state == CircuitState.HALF_OPEN:
+            self._state = CircuitState.OPEN
+            self.opened_at = time.monotonic()
+            return
+
+        if self._state == CircuitState.CLOSED:
+            self.failure_count += 1
+
+            if self.failure_count >= self.failure_threshold:
+                self._state = CircuitState.OPEN
+                self.opened_at = time.monotonic()
 
     def allow_request(self) -> bool:
         """
@@ -71,11 +89,26 @@ class CircuitBreaker:
         Return True if CLOSED, or if OPEN but cooldown has elapsed (in which
         case you should transition to HALF_OPEN as a side effect here).
         """
+        if self._state == CircuitState.CLOSED:
+            return True
+
+        if self._state == CircuitState.OPEN:
+            elapsed = time.monotonic() - self.opened_at
+
+            if elapsed >= self.cooldown_seconds:
+                self._state = CircuitState.HALF_OPEN
+                return True
+
+            return False
+
+        if self._state == CircuitState.HALF_OPEN:
+            return False
         # TODO(you): implement, including the OPEN -> HALF_OPEN transition
         # based on elapsed cooldown time.
         raise NotImplementedError("Implement CircuitBreaker.allow_request()")
 
     @property
     def state(self) -> CircuitState:
+        return self._state 
         # TODO(you): expose current state (useful for logging/dashboard/tests)
         raise NotImplementedError("Implement CircuitBreaker.state")
