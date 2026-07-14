@@ -100,6 +100,53 @@ class InMemoryTokenBucket:
 
 class RedisTokenBucket:
     """Stage 2: only start this once InMemoryTokenBucket's tests pass."""
+    LUA_SCRIPT = """
+        local key = KEYS[1]
+        local capacity = tonumber(ARGV[1])
+        local refill_rate = tonumber(ARGV[2])
+        local tokens_requested = tonumber(ARGV[3])
+
+        local redis_time= redis.call('TIME')
+        local current_time = tonumber(redis_time[1]) + tonumber(redis_time[2]) /1000000
+        local bucket = redis.call(
+            "HMGET",
+            key,
+            "tokens",
+            "last_refill_time"
+        )
+
+        local tokens = tonumber(bucket[1])
+        local last_refill_time = tonumber(bucket[2])
+        if tokens == nil or last_refill_time == nil then
+            tokens = capacity
+            last_refill_time = current_time
+        end
+        local elapsed = current_time - last_refill_time
+
+        local refilled_tokens = elapsed * refill_rate
+
+        tokens = math.min(
+            capacity,
+            tokens + refilled_tokens
+        )
+        local allowed = 0
+
+        if tokens >= tokens_requested then
+            tokens = tokens - tokens_requested
+            allowed = 1
+        end
+
+        redis.call(
+            "HMSET",
+            key,
+            "tokens",
+            tokens,
+            "last_refill_time",
+            current_time
+        )
+
+        return allowed
+    """  
 
     def __init__(self, redis_client, key: str, capacity: int, refill_rate_per_second: float):
         self.redis = redis_client
@@ -108,7 +155,17 @@ class RedisTokenBucket:
         self.refill_rate = refill_rate_per_second
 
     async def allow(self, tokens_requested: int = 1) -> bool:
+        result = await self.redis.eval(
+        self.LUA_SCRIPT,
+        1,
+        self.key,
+        self.capacity,
+        self.refill_rate,
+        tokens_requested,
+        )
+        return bool(result)  # Redis returns 1 for True, 0 for False
         # TODO(you): implement atomically (Lua script or WATCH/MULTI/EXEC).
         # This must give the same correctness guarantee as the in-memory
         # version, but under concurrent access from multiple processes.
         raise NotImplementedError("Implement RedisTokenBucket.allow()")
+    
