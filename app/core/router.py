@@ -38,7 +38,10 @@ own real skill (this is the same shape of problem as your Razorpay webhook
 retry/reconciliation logic, if that's a useful anchor).
 """
 
+from itertools import chain
 from typing import Dict, List
+
+from httpx import request
 
 from app.core.circuit_breaker import CircuitBreaker
 from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName
@@ -64,6 +67,13 @@ class GatewayRouter:
         raise NotImplementedError("Implement GatewayRouter.route_request()")
 
     def _build_chain(self, request: GatewayRequest) -> List[ProviderName]:
-        """Put the preferred provider first (if set), then the rest of the default chain."""
-        # TODO(you): implement.
-        raise NotImplementedError("Implement GatewayRouter._build_chain()")
+        
+      if request.preferred_provider is None:
+         return list(self.default_chain)
+
+      chain = [request.preferred_provider]
+
+      for provider in self.default_chain:
+         if provider != request.preferred_provider:
+            chain.append(provider)
+      return chain

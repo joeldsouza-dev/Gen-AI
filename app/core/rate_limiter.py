@@ -58,7 +58,7 @@ class InMemoryTokenBucket:
         # TODO(you): what state do you need to track? (hint: current token
         # count, and the last time you computed a refill)
 
-    def allow(self, tokens_requested: int = 1) -> bool:
+    async def allow(self, tokens_requested: int = 1) -> bool:
         """
         Return True and deduct tokens if enough are available, else return
         False and deduct nothing.
@@ -76,7 +76,8 @@ class InMemoryTokenBucket:
             return True
         else:
             return False
-        raise NotImplementedError("Implement InMemoryTokenBucket.allow()")
+        
+
     @pytest.mark.asyncio
     async def test_concurrent_load_respects_limit():
         bucket = InMemoryTokenBucket(
@@ -85,7 +86,7 @@ class InMemoryTokenBucket:
         )
 
         async def make_request():
-            return bucket.allow()
+            return await bucket.allow()
 
         requests = [
             make_request()

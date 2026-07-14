@@ -9,37 +9,38 @@ import time
 import pytest
 import redis.asyncio as redis
 import asyncio
-from app.core.rate_limiter import InMemoryTokenBucket
 from app.core.rate_limiter import InMemoryTokenBucket, RedisTokenBucket
 
 
-def test_in_memory_bucket_allows_up_to_capacity():
+@pytest.mark.asyncio
+async def test_in_memory_bucket_allows_up_to_capacity():
     bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=0)
-    assert bucket.allow() is True
-    assert bucket.allow() is True
-    assert bucket.allow() is True
-    assert bucket.allow() is True
-    assert bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
 
-    assert bucket.allow() is False  # no refill, isolate the "allow" logic
+    assert await bucket.allow() is False  # no refill, isolate the "allow" logic
     # TODO(you): assert that exactly 5 calls to bucket.allow() return True,
     # and the 6th returns False.
 
 
-def test_in_memory_bucket_refills_over_time():
+@pytest.mark.asyncio
+async def test_in_memory_bucket_refills_over_time():
     bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=5)  # refills fully in 1 second
     # TODO(you): drain the bucket (5 calls to allow()), confirm the 6th fails,
     # sleep ~1.1 seconds (time.sleep), then confirm allow() succeeds again.
     # (Yes, a real sleep in a test is a bit slow — that's fine for this one,
     # it's testing real elapsed-time behavior.)
     for _ in range(5):
-        assert bucket.allow() is True
+        assert  await bucket.allow() is True
 
-    assert bucket.allow() is False
+    assert await bucket.allow() is False
 
-    time.sleep(1.1)
+    await asyncio.sleep(1.1)
 
-    assert bucket.allow() is True
+    assert await bucket.allow() is True
 
 
 @pytest.mark.asyncio
@@ -71,7 +72,7 @@ async def test_redis_bucket_allows_up_to_capacity():
         redis_client=redis_client,
         key="test:rate_limit:capacity",
         capacity=5,
-        refill_rate_per_second=0,
+        refill_rate_per_second=5,
     )
 
     await redis_client.delete("test:rate_limit:capacity")
