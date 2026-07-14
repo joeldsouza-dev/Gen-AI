@@ -7,12 +7,21 @@ algorithm before adding network/concurrency complexity on top of it.
 import time
 
 import pytest
-
+import redis.asyncio as redis
+import asyncio
 from app.core.rate_limiter import InMemoryTokenBucket
+from app.core.rate_limiter import InMemoryTokenBucket, RedisTokenBucket
 
 
 def test_in_memory_bucket_allows_up_to_capacity():
-    bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=0)  # no refill, isolate the "allow" logic
+    bucket = InMemoryTokenBucket(capacity=5, refill_rate_per_second=0)
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+    assert bucket.allow() is True
+
+    assert bucket.allow() is False  # no refill, isolate the "allow" logic
     # TODO(you): assert that exactly 5 calls to bucket.allow() return True,
     # and the 6th returns False.
 
@@ -23,6 +32,14 @@ def test_in_memory_bucket_refills_over_time():
     # sleep ~1.1 seconds (time.sleep), then confirm allow() succeeds again.
     # (Yes, a real sleep in a test is a bit slow — that's fine for this one,
     # it's testing real elapsed-time behavior.)
+    for _ in range(5):
+        assert bucket.allow() is True
+
+    assert bucket.allow() is False
+
+    time.sleep(1.1)
+
+    assert bucket.allow() is True
 
 
 @pytest.mark.asyncio
@@ -46,3 +63,75 @@ async def test_concurrent_load_respects_limit():
     # calls to bucket.allow() against a bucket with capacity=20, and assert
     # sum(results) == 20.
     pass
+@pytest.mark.asyncio
+async def test_redis_bucket_allows_up_to_capacity():
+    redis_client = redis.from_url("redis://localhost:6379/0")
+
+    bucket = RedisTokenBucket(
+        redis_client=redis_client,
+        key="test:rate_limit:capacity",
+        capacity=5,
+        refill_rate_per_second=0,
+    )
+
+    await redis_client.delete("test:rate_limit:capacity")
+
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+    assert await bucket.allow() is True
+
+    assert await bucket.allow() is False
+
+    await redis_client.aclose()
+@pytest.mark.asyncio
+async def test_redis_bucket_refills_over_time():
+    redis_client = redis.from_url("redis://localhost:6379/0")
+
+    key = "test:rate_limit:refill"
+
+    bucket = RedisTokenBucket(
+        redis_client=redis_client,
+        key=key,
+        capacity=5,
+        refill_rate_per_second=5,
+    )
+
+    await redis_client.delete(key)
+
+    for _ in range(5):
+        assert await bucket.allow() is True
+
+    assert await bucket.allow() is False
+
+    await asyncio.sleep(1.1)
+
+    assert await bucket.allow() is True
+
+    await redis_client.aclose()
+@pytest.mark.asyncio
+async def test_redis_concurrent_load_respects_limit():
+    redis_client = redis.from_url("redis://localhost:6379/0")
+
+    key = "test:rate_limit:concurrent"
+
+    bucket = RedisTokenBucket(
+        redis_client=redis_client,
+        key=key,
+        capacity=20,
+        refill_rate_per_second=0,
+    )
+
+    await redis_client.delete(key)
+
+    requests = [
+        bucket.allow()
+        for _ in range(50)
+    ]
+
+    results = await asyncio.gather(*requests)
+
+    assert sum(results) == 20
+
+    await redis_client.aclose()

@@ -44,7 +44,8 @@ STAGE 2 — port to Redis, so the limiter works across multiple gateway
 """
 
 import time
-
+import asyncio
+import pytest
 
 class InMemoryTokenBucket:
     """Stage 1: implement this fully before touching Redis."""
@@ -52,6 +53,8 @@ class InMemoryTokenBucket:
     def __init__(self, capacity: int, refill_rate_per_second: float):
         self.capacity = capacity
         self.refill_rate = refill_rate_per_second
+        self.tokens = capacity
+        self.last_refill_time = time.monotonic()
         # TODO(you): what state do you need to track? (hint: current token
         # count, and the last time you computed a refill)
 
@@ -62,11 +65,88 @@ class InMemoryTokenBucket:
         """
         # TODO(you): implement the refill-then-check-then-deduct logic
         # described in the module docstring.
+        current_time = time.monotonic()
+        elapsed_time = current_time - self.last_refill_time
+        refill_amount = elapsed_time * self.refill_rate
+        self.tokens = min(self.capacity, self.tokens + refill_amount)  
+        self.last_refill_time = current_time
+
+        if self.tokens >= tokens_requested:
+            self.tokens -= tokens_requested
+            return True
+        else:
+            return False
         raise NotImplementedError("Implement InMemoryTokenBucket.allow()")
+    @pytest.mark.asyncio
+    async def test_concurrent_load_respects_limit():
+        bucket = InMemoryTokenBucket(
+            capacity=20,
+            refill_rate_per_second=0,
+        )
+
+        async def make_request():
+            return bucket.allow()
+
+        requests = [
+            make_request()
+            for _ in range(50)
+        ]
+
+        results = await asyncio.gather(*requests)
+
+        assert sum(results) == 20
+    
 
 
 class RedisTokenBucket:
     """Stage 2: only start this once InMemoryTokenBucket's tests pass."""
+    LUA_SCRIPT = """
+        local key = KEYS[1]
+        local capacity = tonumber(ARGV[1])
+        local refill_rate = tonumber(ARGV[2])
+        local tokens_requested = tonumber(ARGV[3])
+
+        local redis_time= redis.call('TIME')
+        local current_time = tonumber(redis_time[1]) + tonumber(redis_time[2]) /1000000
+        local bucket = redis.call(
+            "HMGET",
+            key,
+            "tokens",
+            "last_refill_time"
+        )
+
+        local tokens = tonumber(bucket[1])
+        local last_refill_time = tonumber(bucket[2])
+        if tokens == nil or last_refill_time == nil then
+            tokens = capacity
+            last_refill_time = current_time
+        end
+        local elapsed = current_time - last_refill_time
+
+        local refilled_tokens = elapsed * refill_rate
+
+        tokens = math.min(
+            capacity,
+            tokens + refilled_tokens
+        )
+        local allowed = 0
+
+        if tokens >= tokens_requested then
+            tokens = tokens - tokens_requested
+            allowed = 1
+        end
+
+        redis.call(
+            "HMSET",
+            key,
+            "tokens",
+            tokens,
+            "last_refill_time",
+            current_time
+        )
+
+        return allowed
+    """  
 
     def __init__(self, redis_client, key: str, capacity: int, refill_rate_per_second: float):
         self.redis = redis_client
@@ -75,7 +155,17 @@ class RedisTokenBucket:
         self.refill_rate = refill_rate_per_second
 
     async def allow(self, tokens_requested: int = 1) -> bool:
+        result = await self.redis.eval(
+        self.LUA_SCRIPT,
+        1,
+        self.key,
+        self.capacity,
+        self.refill_rate,
+        tokens_requested,
+        )
+        return bool(result)  # Redis returns 1 for True, 0 for False
         # TODO(you): implement atomically (Lua script or WATCH/MULTI/EXEC).
         # This must give the same correctness guarantee as the in-memory
         # version, but under concurrent access from multiple processes.
         raise NotImplementedError("Implement RedisTokenBucket.allow()")
+    

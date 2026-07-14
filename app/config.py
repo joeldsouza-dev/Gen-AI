@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1"
+    ollama_model: str = "llama3.1:8b"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
