@@ -44,7 +44,7 @@ from typing import Dict, List
 from httpx import request
 
 from app.core.circuit_breaker import CircuitBreaker
-from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName
+from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName, RateLimitError
 from app.core.rate_limiter import InMemoryTokenBucket
 from app.providers.base import BaseProvider
 
@@ -63,8 +63,29 @@ class GatewayRouter:
         self.default_chain = default_chain
 
     async def route_request(self, request: GatewayRequest) -> GatewayResponse:
+        allowed = await self.rate_limiter.allow(request.team_id)
+        if not allowed:
+            raise RateLimitError(f"Rate limit exceeded for team {request.team_id}", retryable=False)
+        chain = self._build_chain(request)
+        for provider_name in chain:
+            breaker = self.circuit_breakers[provider_name]
+
+            if not breaker.allow_request():
+               continue
+
+            provider = self.providers[provider_name]
+
+            response = await provider.call(request)
+
+            return response 
+        raise RuntimeError("No available providers.")
+
+
+
+
+        
+
         # TODO(you): implement the full flow described in the docstring above.
-        raise NotImplementedError("Implement GatewayRouter.route_request()")
 
     def _build_chain(self, request: GatewayRequest) -> List[ProviderName]:
         
