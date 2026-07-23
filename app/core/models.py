@@ -56,6 +56,8 @@ class ProviderError(Exception):
     this with `retryable=True/False` — the router needs that distinction to
     decide whether to retry the same provider or move straight to fallback.
     """
+class RateLimitError(Exception):
+    """Raised when a request exceeds the configured rate limit."""
 
     def __init__(self, message: str, retryable: bool = True):
         super().__init__(message)
