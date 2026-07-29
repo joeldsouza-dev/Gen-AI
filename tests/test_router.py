@@ -7,6 +7,8 @@ from app.core.models import (
     GatewayResponse,
 )
 from app.core.router import GatewayRouter
+from app.core.models import ProviderError
+
 
 
 
@@ -38,6 +40,29 @@ class OpenCircuitBreaker:
 class ClosedCircuitBreaker:
     def allow_request(self):
         return True
+
+class SpyCircuitBreaker:
+    def __init__(self, allow=True):
+        self.allow = allow
+        self.success_called = False
+        self.failure_called = False
+
+    def allow_request(self):
+        return self.allow
+
+    def record_success(self):
+        self.success_called = True
+
+    def record_failure(self):
+        self.failure_called = True
+
+
+class FailingProvider:
+    async def call(self, request: GatewayRequest):
+        raise ProviderError(
+            message="Provider failed",
+            retryable=True,
+        )
 
 def test_build_chain_uses_default_order_without_preference():
     default_chain = [
@@ -156,3 +181,59 @@ async def test_route_request_skips_open_circuit_breaker():
 
     with pytest.raises(RuntimeError):
         await router.route_request(request)
+@pytest.mark.asyncio
+async def test_route_request_records_success():
+    breaker = SpyCircuitBreaker()
+
+    router = GatewayRouter(
+        providers={
+            ProviderName.OLLAMA: FakeProvider(),
+        },
+        circuit_breakers={
+            ProviderName.OLLAMA: breaker,
+        },
+        rate_limiter=AllowingRateLimiter(),
+        default_chain=[
+            ProviderName.OLLAMA,
+        ],
+    )
+
+    request = GatewayRequest(
+        team_id="team-1",
+        prompt="Hello",
+    )
+
+    response = await router.route_request(request)
+
+    assert response.text == "Hello from Fake Provider!"
+    assert breaker.success_called is True
+    assert breaker.failure_called is False
+
+
+@pytest.mark.asyncio
+async def test_route_request_records_failure():
+    breaker = SpyCircuitBreaker()
+
+    router = GatewayRouter(
+        providers={
+            ProviderName.OLLAMA: FailingProvider(),
+        },
+        circuit_breakers={
+            ProviderName.OLLAMA: breaker,
+        },
+        rate_limiter=AllowingRateLimiter(),
+        default_chain=[
+            ProviderName.OLLAMA,
+        ],
+    )
+
+    request = GatewayRequest(
+        team_id="team-1",
+        prompt="Hello",
+    )
+
+    with pytest.raises(RuntimeError):
+        await router.route_request(request)
+
+    assert breaker.failure_called is True
+    assert breaker.success_called is False

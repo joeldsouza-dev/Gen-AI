@@ -75,9 +75,13 @@ class GatewayRouter:
 
             provider = self.providers[provider_name]
 
-            response = await provider.call(request)
-
-            return response 
+            try:
+                response = await provider.call(request)
+                breaker.record_success()
+                return response
+            except ProviderError:
+                breaker.record_failure()
+                continue  # Move to the next provider in the chain
         raise RuntimeError("No available providers.")
 
 
