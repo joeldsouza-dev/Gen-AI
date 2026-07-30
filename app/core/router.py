@@ -38,6 +38,7 @@ own real skill (this is the same shape of problem as your Razorpay webhook
 retry/reconciliation logic, if that's a useful anchor).
 """
 
+import asyncio
 from itertools import chain
 from typing import Dict, List
 
@@ -56,10 +57,12 @@ class GatewayRouter:
         circuit_breakers: Dict[ProviderName, CircuitBreaker],
         rate_limiter,  # your bucket implementation, keyed per team_id
         default_chain: List[ProviderName],
+        max_retries: int = 2,
     ):
         self.providers = providers
         self.circuit_breakers = circuit_breakers
         self.rate_limiter = rate_limiter
+        self.max_retries = max_retries
         self.default_chain = default_chain
 
     async def route_request(self, request: GatewayRequest) -> GatewayResponse:
@@ -74,15 +77,24 @@ class GatewayRouter:
                continue
 
             provider = self.providers[provider_name]
+            total_attempts = 1 + self.max_retries  # 1 initial try + max_retries
+            for attempt in range(total_attempts):
 
-            try:
-                response = await provider.call(request)
-                breaker.record_success()
-                return response
-            except ProviderError:
-                breaker.record_failure()
-                continue  # Move to the next provider in the chain
+               try:
+                  response = await provider.call(request)
+                  breaker.record_success()
+                  return response
+               except ProviderError as error:
+                  # Move to the next provider in the chain
+                  if not error.retryable or attempt >= self.max_retries:
+                     breaker.record_failure()
+                     break  # Move to the next provider in the chain
+                  # else:
+                  #    # Retry the same provider after a short backoff
+                  #    await asyncio.sleep(0.1)  # Simple fixed backoff for demonstration
         raise RuntimeError("No available providers.")
+         
+         
 
 
 
