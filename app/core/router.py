@@ -66,32 +66,44 @@ class GatewayRouter:
         self.default_chain = default_chain
 
     async def route_request(self, request: GatewayRequest) -> GatewayResponse:
-        allowed = await self.rate_limiter.allow(request.team_id)
+        allowed = await self.rate_limiter.allow()
         if not allowed:
             raise RateLimitError(f"Rate limit exceeded for team {request.team_id}", retryable=False)
         chain = self._build_chain(request)
-        for provider_name in chain:
+        for index, provider_name in enumerate(chain):
             breaker = self.circuit_breakers[provider_name]
 
             if not breaker.allow_request():
                continue
 
             provider = self.providers[provider_name]
-            total_attempts = 1 + self.max_retries  # 1 initial try + max_retries
+            total_attempts = 1 + self.max_retries
+            print(f"Trying provider: {provider_name}")  # 1 initial try + max_retries
             for attempt in range(total_attempts):
 
                try:
-                  response = await provider.call(request)
-                  breaker.record_success()
-                  return response
+                     print(f"Trying provider: {provider_name}")
+                     response = await provider.call(request)
+                     print("SUCCESS")
+                     breaker.record_success()
+                     response.was_fallback = index > 0
+                     return response
+               
                except ProviderError as error:
-                  # Move to the next provider in the chain
+                  print("ProviderError:", repr(error))
+                  print("Message:", str(error))
+
                   if not error.retryable or attempt >= self.max_retries:
                      breaker.record_failure()
-                     break  # Move to the next provider in the chain
+                     break # Move to the next provider in the chain
                   # else:
                   #    # Retry the same provider after a short backoff
                   #    await asyncio.sleep(0.1)  # Simple fixed backoff for demonstration
+               except Exception as error:
+                  print("UNEXPECTED ERROR")
+                  print(type(error))
+                  print(repr(error))
+    
         raise RuntimeError("No available providers.")
          
          

@@ -27,6 +27,7 @@ success/failure into GatewayResponse / ProviderError.
 
 import time
 
+
 import httpx
 
 from app.config import settings
@@ -43,9 +44,133 @@ class OpenRouterProvider(BaseProvider):
         self.model = settings.openrouter_model
 
     async def call(self, request: GatewayRequest) -> GatewayResponse:
-        # TODO(you): implement. See docstring above.
-        raise NotImplementedError("Implement OpenRouterProvider.call()")
+            messages = []
+    
+            if request.system_prompt:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": request.system_prompt,
+                    }
+                )
+    
+            messages.append(
+                {
+                    "role": "user",
+                    "content": request.prompt,
+                }
+            )
+    
+            payload = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": request.temperature,
+                "max_tokens": request.max_tokens,
+            }
 
+            headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",      # Optional but recommended
+            "X-OpenRouter-Title": "LLM Gateway",     # Optional but recommended
+        }
+    
+            start_time = time.perf_counter()
+    
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                        timeout=60.0,  # Use default timeout
+                    )
+    
+                response.raise_for_status()
+    
+            except httpx.TimeoutException as exc:
+                raise ProviderError(
+                    f"Error calling openrouter API: {exc}",
+                    retryable=True,
+                ) from exc
+    
+            except httpx.HTTPStatusError as exc:
+                print("=" * 80)
+                print("OPENROUTER HTTP ERROR")
+                print("Status :", exc.response.status_code)
+                print("Body   :", exc.response.text)
+                print("=" * 80)
+    
+                raise ProviderError(
+                    f"OpenRouter returned HTTP {exc.response.status_code}: {exc.response.text}",
+                    retryable=exc.response.status_code == 429 or exc.response.status_code >= 500,
+                ) from exc
+    
+            except httpx.RequestError as exc:
+                print("=" * 80)
+                print("REQUEST ERROR")
+                print(repr(exc))
+                print("=" * 80)
+    
+                raise ProviderError(
+                    f"Error calling OpenRouter API: {exc}",
+                    retryable=True,
+                ) from exc
+    
+            latency_ms = (time.perf_counter() - start_time) * 1000
+    
+            data = response.json()
+    
+            try:
+                return GatewayResponse(
+                    text=data["choices"][0]["message"]["content"],
+                    provider_used=self.name,
+                    model_used=data["model"],
+                    input_tokens=data["usage"]["prompt_tokens"],
+                    output_tokens=data["usage"]["completion_tokens"],
+                    latency_ms=latency_ms,
+                )
+    
+            except (KeyError, ValueError) as exc:
+                raise ProviderError(
+                    f"Unexpected response format from OpenRouter API: {data}",
+                    retryable=False,
+                ) from exc
+    
     async def health_check(self) -> bool:
-        # TODO(you): implement.
-        raise NotImplementedError("Implement OpenRouterProvider.health_check()")
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost",
+                "X-OpenRouter-Title": "LLM Gateway",
+            }
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{self.base_url}/models",
+                        headers=headers,
+                        timeout=5.0,
+                    )
+                if response.status_code >= 400:
+                    print("=" * 80)
+                    print("OPENROUTER ERROR")
+                    print("Status:", response.status_code)
+                    print("Response:", response.text)
+                    print("=" * 80)
+    
+                response.raise_for_status()
+
+                data = response.json()
+
+                print("=" * 80)
+                print("Parsed JSON:")
+                print(data)
+                print("=" * 80)
+
+                return any(
+                    model["id"] == self.model
+                    for model in data["data"]
+                )
+    
+            except httpx.HTTPError:
+                return False

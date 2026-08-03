@@ -6,19 +6,29 @@ you need a config value instead of calling os.environ directly, so there's
 a single source of truth and it's easy to see everything the app depends on.
 """
 
+from dotenv import load_dotenv
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
     # NVIDIA NIM
-    nvidia_nim_api_key: str = ""
+    nvidia_nim_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"),
+    )
     nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_nim_model: str = "meta/llama-3.1-70b-instruct"
 
     # OpenRouter
-    openrouter_api_key: str = ""
+    openrouter_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPEN_ROUTER_API_KEY", "OPENROUTER_API_KEY"),
+    )
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_model: str = "meta-llama/llama-3.1-8b-instruct:free"
+    openrouter_model: str = "openai/gpt-oss-20b:free"
 
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
@@ -38,6 +48,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"
 
 
 settings = Settings()
+ 
