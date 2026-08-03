@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"),
     )
     nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_nim_model: str = "meta/llama-3.1-70b-instruct"
+    nvidia_nim_model: str = "nvidia/nemotron-3-ultra-550b-a55b"
 
     # OpenRouter
     openrouter_api_key: str = Field(

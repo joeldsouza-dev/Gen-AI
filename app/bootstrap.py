@@ -2,6 +2,7 @@ from app.core.circuit_breaker import CircuitBreaker
 from app.core.models import ProviderName
 from app.core.rate_limiter import InMemoryTokenBucket
 from app.core.router import GatewayRouter
+from app.providers.nvidia_nim import NvidiaNimProvider
 from app.providers.ollama import OllamaProvider
 from app.providers.openrouter import OpenRouterProvider
 
@@ -13,6 +14,7 @@ def create_providers():
     return {
         ProviderName.OLLAMA: OllamaProvider(),
         ProviderName.OPENROUTER: OpenRouterProvider(),
+        ProviderName.NVIDIA_NIM: NvidiaNimProvider(),
     }
 
 
@@ -26,6 +28,10 @@ def create_circuit_breakers():
             cooldown_seconds=30,
         ),
         ProviderName.OPENROUTER: CircuitBreaker(
+            failure_threshold=3,
+            cooldown_seconds=30,
+        ),
+        ProviderName.NVIDIA_NIM: CircuitBreaker(
             failure_threshold=3,
             cooldown_seconds=30,
         ),
@@ -56,7 +62,8 @@ def create_gateway_router():
         rate_limiter=rate_limiter,
         default_chain=[
             ProviderName.OLLAMA,
-            ProviderName.OPENROUTER
+            ProviderName.OPENROUTER,
+            ProviderName.NVIDIA_NIM
         ],
         max_retries=2,
     )
