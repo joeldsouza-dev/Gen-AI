@@ -1,52 +1,39 @@
 """
 The router — where everything else in this project gets wired together.
-By the time you write this file, rate_limiter.py and circuit_breaker.py
-should already be implemented and tested in isolation.
 
-Responsibilities of `route_request()`:
-  1. Check the rate limiter for this team_id. If not allowed -> raise/return
-     a 429-equivalent immediately. Don't even look at providers yet.
-  2. Build a fallback chain: [preferred_provider (if set), then the rest in
-     some sensible default order, e.g. NVIDIA_NIM -> OPENROUTER -> OLLAMA].
-  3. For each provider in the chain, in order:
-       a. Check that provider's circuit breaker via `allow_request()`.
-          If False, skip it (don't even try) and move to the next provider.
-       b. If True, call `provider.call(request)`.
-       c. On success: call `breaker.record_success()`, return the
-          GatewayResponse (set `was_fallback=True` if this wasn't the first
-          provider tried).
-       d. On ProviderError: call `breaker.record_failure()`. If
-          `error.retryable` is False, or you've already retried this
-          provider once, move to the next provider in the chain. If
-          `error.retryable` is True and you haven't retried yet, you may
-          retry the SAME provider once with a short backoff before moving
-          on (this is the "retry before fallback" step from the project
-          spec — keep it simple, e.g. one retry with a fixed short delay).
-  4. If every provider in the chain fails, raise a clear error that the
-     API layer can turn into a 502/503 response — don't let a provider's
-     raw exception leak up to the caller.
+Responsibilities of route_request():
 
-Also worth logging/tracing at each step (this is what your OpenTelemetry
-spans should wrap): which provider was tried, whether the breaker allowed
-it, whether it succeeded, and total time spent finding a working provider.
-That trace is literally the demo for this project — "watch it fail over."
-
-TODO(you): implement `GatewayRouter` below. The pieces (providers, rate
-limiter, circuit breakers) are all built already at this point — this file
-is about getting the control flow and error handling right, which is its
-own real skill (this is the same shape of problem as your Razorpay webhook
-retry/reconciliation logic, if that's a useful anchor).
+1. Check the rate limiter.
+2. Build the provider fallback chain.
+3. Check each provider's circuit breaker.
+4. Attempt the provider.
+5. Retry retryable failures.
+6. Fall back to the next provider.
+7. Emit observability events throughout the process.
+8. Return a GatewayResponse on success.
+9. Raise a clear error if every provider fails.
 """
 
 import asyncio
-from itertools import chain
+from datetime import datetime
 from typing import Dict, List
 
-from httpx import request
-
 from app.core.circuit_breaker import CircuitBreaker
-from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName, RateLimitError
-from app.core.rate_limiter import InMemoryTokenBucket
+from app.core.models import (
+    GatewayRequest,
+    GatewayResponse,
+    ProviderError,
+    ProviderName,
+    RateLimitError,
+)
+from app.observability import event_emitter
+from app.observability.events import (
+    FallbackEvent,
+    ProviderAttemptEvent,
+    ProviderFailureEvent,
+    ProviderSuccessEvent,
+    RetryEvent,
+)
 from app.providers.base import BaseProvider
 
 
@@ -55,7 +42,7 @@ class GatewayRouter:
         self,
         providers: Dict[ProviderName, BaseProvider],
         circuit_breakers: Dict[ProviderName, CircuitBreaker],
-        rate_limiter,  # your bucket implementation, keyed per team_id
+        rate_limiter,
         default_chain: List[ProviderName],
         max_retries: int = 2,
     ):
@@ -65,64 +52,189 @@ class GatewayRouter:
         self.max_retries = max_retries
         self.default_chain = default_chain
 
-    async def route_request(self, request: GatewayRequest) -> GatewayResponse:
+    async def route_request(
+        self,
+        request: GatewayRequest,
+        request_id: str,
+    ) -> GatewayResponse:
+
+        # --------------------------------------------------
+        # 1. Rate limit check
+        # --------------------------------------------------
+
         allowed = await self.rate_limiter.allow()
+
         if not allowed:
-            raise RateLimitError(f"Rate limit exceeded for team {request.team_id}", retryable=False)
-        chain = self._build_chain(request)
-        for index, provider_name in enumerate(chain):
+            raise RateLimitError(
+                f"Rate limit exceeded for team {request.team_id}",
+                retryable=False,
+            )
+
+        # --------------------------------------------------
+        # 2. Build provider chain
+        # --------------------------------------------------
+
+        provider_chain = self._build_chain(request)
+
+        # --------------------------------------------------
+        # 3. Try providers in order
+        # --------------------------------------------------
+
+        for index, provider_name in enumerate(provider_chain):
+
             breaker = self.circuit_breakers[provider_name]
 
+            # --------------------------------------------------
+            # 3a. Check circuit breaker
+            # --------------------------------------------------
+
             if not breaker.allow_request():
-               continue
+                continue
 
             provider = self.providers[provider_name]
+
+            # Initial attempt + configured retries
             total_attempts = 1 + self.max_retries
-            print(f"Trying provider: {provider_name}")  # 1 initial try + max_retries
+
+            # --------------------------------------------------
+            # 3b. Attempt provider
+            # --------------------------------------------------
+
             for attempt in range(total_attempts):
 
-               try:
-                     print(f"Trying provider: {provider_name}")
-                     response = await provider.call(request)
-                     print("SUCCESS")
-                     breaker.record_success()
-                     response.was_fallback = index > 0
-                     return response
-               
-               except ProviderError as error:
-                  print("ProviderError:", repr(error))
-                  print("Message:", str(error))
+                # --------------------------------------------------
+                # Emit provider attempt event
+                # --------------------------------------------------
 
-                  if not error.retryable or attempt >= self.max_retries:
-                     breaker.record_failure()
-                     break # Move to the next provider in the chain
-                  # else:
-                  #    # Retry the same provider after a short backoff
-                  #    await asyncio.sleep(0.1)  # Simple fixed backoff for demonstration
-               except Exception as error:
-                  print("UNEXPECTED ERROR")
-                  print(type(error))
-                  print(repr(error))
-    
+                event_emitter.emit(
+                    ProviderAttemptEvent(
+                        request_id=request_id,
+                        timestamp=datetime.now(),
+                        event_type="provider_attempt",
+                        provider=provider_name.value,
+                        attempt=attempt + 1,
+                    )
+                )
+
+                try:
+                    # --------------------------------------------------
+                    # Call provider
+                    # --------------------------------------------------
+
+                    response = await provider.call(request)
+
+                    # --------------------------------------------------
+                    # Provider succeeded
+                    # --------------------------------------------------
+
+                    breaker.record_success()
+
+                    event_emitter.emit(
+                        ProviderSuccessEvent(
+                           request_id=request_id,
+                           timestamp=datetime.now(),
+                           event_type="provider_success",
+                           provider=provider_name.value,
+                           latency_ms=response.latency_ms,
+                           input_tokens=response.input_tokens,
+                           output_tokens=response.output_tokens,
+                        )
+                     )
+
+                    # Mark response as fallback if this wasn't
+                    # the first provider in the chain.
+                    response.was_fallback = index > 0
+
+                    return response
+
+                except ProviderError as error:
+
+                    # --------------------------------------------------
+                    # Provider failed
+                    # --------------------------------------------------
+
+                    event_emitter.emit(
+                        ProviderFailureEvent(
+                            request_id=request_id,
+                            timestamp=datetime.now(),
+                            event_type="provider_failure",
+                            provider=provider_name.value,
+                            error=str(error),
+                        )
+                    )
+
+                    # --------------------------------------------------
+                    # 3c. Non-retryable failure
+                    # --------------------------------------------------
+
+                    if not error.retryable:
+                        breaker.record_failure()
+                        break
+
+                    # --------------------------------------------------
+                    # 3d. Retry limit reached
+                    # --------------------------------------------------
+
+                    if attempt >= self.max_retries:
+                        breaker.record_failure()
+                        break
+
+                    # --------------------------------------------------
+                    # 3e. Retry same provider
+                    # --------------------------------------------------
+
+                    event_emitter.emit(
+                        RetryEvent(
+                            request_id=request_id,
+                            timestamp=datetime.now(),
+                            event_type="retry",
+                            provider=provider_name.value,
+                            attempt=attempt + 2,
+                        )
+                    )
+
+                    await asyncio.sleep(0.1)
+
+            # --------------------------------------------------
+            # 4. Provider exhausted → fallback
+            # --------------------------------------------------
+
+            if index < len(provider_chain) - 1:
+
+                next_provider = provider_chain[index + 1]
+
+                event_emitter.emit(
+                    FallbackEvent(
+                        request_id=request_id,
+                        timestamp=datetime.now(),
+                        event_type="fallback",
+                        from_provider=provider_name.value,
+                        to_provider=next_provider.value,
+                    )
+                )
+
+        # --------------------------------------------------
+        # 5. Every provider failed
+        # --------------------------------------------------
+
         raise RuntimeError("No available providers.")
-         
-         
 
+    def _build_chain(
+        self,
+        request: GatewayRequest
+    ) -> List[ProviderName]:
 
+        # No preferred provider:
+        # use the configured default chain.
+        if request.preferred_provider is None:
+            return list(self.default_chain)
 
+        # Preferred provider goes first.
+        provider_chain = [request.preferred_provider]
 
-        
+        # Add the remaining providers afterward.
+        for provider in self.default_chain:
+            if provider != request.preferred_provider:
+                provider_chain.append(provider)
 
-        # TODO(you): implement the full flow described in the docstring above.
-
-    def _build_chain(self, request: GatewayRequest) -> List[ProviderName]:
-        
-      if request.preferred_provider is None:
-         return list(self.default_chain)
-
-      chain = [request.preferred_provider]
-
-      for provider in self.default_chain:
-         if provider != request.preferred_provider:
-            chain.append(provider)
-      return chain
+        return provider_chain

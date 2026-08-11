@@ -21,6 +21,8 @@ class ProviderAttemptEvent(GatewayEvent):
 class ProviderSuccessEvent(GatewayEvent):
     provider: str
     latency_ms: float
+    input_tokens: int
+    output_tokens: int
 
 @dataclass
 class ProviderFailureEvent(GatewayEvent):
