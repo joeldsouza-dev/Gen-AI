@@ -13,6 +13,10 @@ app.add_middleware(RequestIDMiddleware)
 
 app.include_router(routes.router)
 
+# Root-level metrics & health for Prometheus scrapers
+app.add_api_route("/metrics", routes.get_metrics, methods=["GET"])
+app.add_api_route("/health", routes.health, methods=["GET"])
+
 
 @app.on_event("startup")
 async def startup() -> None:

@@ -44,3 +44,8 @@ class FallbackEvent(GatewayEvent):
 class RequestFinishedEvent(GatewayEvent):
     provider: str
     total_latency_ms: float
+
+@dataclass
+class StreamFirstTokenEvent(GatewayEvent):
+    provider: str
+    ttft_ms: float

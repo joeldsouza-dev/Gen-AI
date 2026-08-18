@@ -1,8 +1,9 @@
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from app.core.models import (
     GatewayRequest,
@@ -15,6 +16,8 @@ from app.observability.events import (
     RequestStartedEvent,
 )
 from app.observability.handlers import metrics
+from app.observability.prometheus import prometheus_metrics
+
 router = APIRouter(
     prefix="/v1",
     tags=["Gateway"],
@@ -88,9 +91,22 @@ async def chat_completions(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(error))
 
+
 @router.get("/metrics")
-async def get_metrics():
-    return metrics.snapshot()
+async def get_metrics(request: Request, format: str = "prometheus"):
+    gateway_router = getattr(request.app.state, "gateway_router", None)
+    if gateway_router and hasattr(gateway_router, "circuit_breakers"):
+        for name, breaker in gateway_router.circuit_breakers.items():
+            prometheus_metrics.circuit_breaker_state.labels(provider=name.value).set(breaker.state_numeric)
+
+    if format == "json":
+        return metrics.snapshot()
+
+    return Response(
+        content=prometheus_metrics.generate_exposition(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
+
 
 @router.get("/health")
 async def health():

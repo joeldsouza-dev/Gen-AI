@@ -109,6 +109,15 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
-        return self._state 
-        # TODO(you): expose current state (useful for logging/dashboard/tests)
-        raise NotImplementedError("Implement CircuitBreaker.state")
+        return self._state
+
+    @property
+    def state_numeric(self) -> float:
+        """Return numerical state for Prometheus Gauge (0=CLOSED, 1=OPEN, 0.5=HALF_OPEN)."""
+        if self._state == CircuitState.CLOSED:
+            return 0.0
+        elif self._state == CircuitState.OPEN:
+            return 1.0
+        elif self._state == CircuitState.HALF_OPEN:
+            return 0.5
+        return 0.0
