@@ -36,6 +36,7 @@ from app.observability.events import (
     ProviderSuccessEvent,
     RequestFinishedEvent,
     RetryEvent,
+    StreamFirstTokenEvent,
 )
 from app.providers.base import BaseProvider
 
@@ -141,6 +142,7 @@ class GatewayRouter:
                            latency_ms=response.latency_ms,
                            input_tokens=response.input_tokens,
                            output_tokens=response.output_tokens,
+                           team_id=request.team_id,
                         )
                      )
 
@@ -163,6 +165,7 @@ class GatewayRouter:
                             event_type="provider_failure",
                             provider=provider_name.value,
                             error=str(error),
+                            team_id=request.team_id,
                         )
                     )
 
@@ -274,7 +277,17 @@ class GatewayRouter:
                 async for chunk in generator:
                     if not first_chunk_yielded:
                         first_chunk_yielded = True
+                        ttft_ms = (time.perf_counter() - start_time) * 1000
                         breaker.record_success()
+                        event_emitter.emit(
+                            StreamFirstTokenEvent(
+                                request_id=request_id,
+                                timestamp=datetime.now(),
+                                event_type="stream_first_token",
+                                provider=provider_name.value,
+                                ttft_ms=ttft_ms,
+                            )
+                        )
 
                     if chunk.text:
                         token_count += 1
@@ -293,6 +306,7 @@ class GatewayRouter:
                             latency_ms=latency_ms,
                             input_tokens=len(request.prompt.split()),
                             output_tokens=token_count,
+                            team_id=request.team_id,
                         )
                     )
                     event_emitter.emit(
@@ -302,6 +316,7 @@ class GatewayRouter:
                             event_type="request_finished",
                             provider=provider_name.value,
                             total_latency_ms=latency_ms,
+                            team_id=request.team_id,
                         )
                     )
                     yield "data: [DONE]\n\n"
@@ -318,6 +333,7 @@ class GatewayRouter:
                             event_type="provider_failure",
                             provider=provider_name.value,
                             error=str(error),
+                            team_id=request.team_id,
                         )
                     )
                     if index < len(provider_chain) - 1:

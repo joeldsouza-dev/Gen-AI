@@ -14,11 +14,19 @@ class PrometheusCollector:
     def __init__(self, registry: CollectorRegistry = None):
         self.registry = registry or CollectorRegistry()
 
-        # 1. Total Requests Counter (labels: status, team_id)
+        # 1. Total Requests Counter (labels: status [success|failed], team_id)
         self.requests_total = Counter(
             "gateway_requests_total",
-            "Total HTTP requests handled by the LLM gateway.",
+            "Total HTTP requests handled by the LLM gateway (by final status).",
             ["status", "team_id"],
+            registry=self.registry,
+        )
+
+        # 1b. In-Flight Requests Gauge (labels: team_id)
+        self.requests_in_flight = Gauge(
+            "gateway_requests_in_flight",
+            "Current number of in-flight HTTP requests.",
+            ["team_id"],
             registry=self.registry,
         )
 

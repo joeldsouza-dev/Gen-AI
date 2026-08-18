@@ -22,8 +22,8 @@ def test_prometheus_collector_metric_definitions():
     collector = PrometheusCollector(registry=registry)
 
     # 1. Request counter
-    collector.requests_total.labels(status="started", team_id="team-a").inc()
     collector.requests_total.labels(status="success", team_id="team-a").inc()
+    collector.requests_total.labels(status="failed", team_id="team-a").inc()
 
     # 2. Provider attempts & failures
     collector.provider_attempts_total.labels(provider="nvidia_nim").inc()
@@ -47,15 +47,16 @@ def test_prometheus_collector_metric_definitions():
     exposition = collector.generate_exposition().decode("utf-8")
 
     # Assertions
-    assert "gateway_requests_total{status=\"started\",team_id=\"team-a\"} 1.0" in exposition
-    assert "gateway_provider_attempts_total{provider=\"nvidia_nim\"} 1.0" in exposition
-    assert "gateway_provider_failures_total{provider=\"nvidia_nim\"} 1.0" in exposition
-    assert "gateway_fallbacks_total{from_provider=\"nvidia_nim\",to_provider=\"openrouter\"} 1.0" in exposition
-    assert "gateway_tokens_total{provider=\"openrouter\",type=\"input\"} 50.0" in exposition
-    assert "gateway_tokens_total{provider=\"openrouter\",type=\"output\"} 120.0" in exposition
-    assert "gateway_circuit_breaker_state{provider=\"nvidia_nim\"} 1.0" in exposition
-    assert "gateway_circuit_breaker_state{provider=\"openrouter\"} 0.0" in exposition
-    assert "gateway_stream_ttft_seconds_bucket{le=\"0.5\",provider=\"openrouter\"} 1.0" in exposition
+    assert 'gateway_requests_total{status="success",team_id="team-a"} 1.0' in exposition
+    assert 'gateway_requests_total{status="failed",team_id="team-a"} 1.0' in exposition
+    assert 'gateway_provider_attempts_total{provider="nvidia_nim"} 1.0' in exposition
+    assert 'gateway_provider_failures_total{provider="nvidia_nim"} 1.0' in exposition
+    assert 'gateway_fallbacks_total{from_provider="nvidia_nim",to_provider="openrouter"} 1.0' in exposition
+    assert 'gateway_tokens_total{provider="openrouter",type="input"} 50.0' in exposition
+    assert 'gateway_tokens_total{provider="openrouter",type="output"} 120.0' in exposition
+    assert 'gateway_circuit_breaker_state{provider="nvidia_nim"} 1.0' in exposition
+    assert 'gateway_circuit_breaker_state{provider="openrouter"} 0.0' in exposition
+    assert 'gateway_stream_ttft_seconds_bucket{le="0.5",provider="openrouter"} 1.0' in exposition
 
 
 def test_provider_label_isolation():
@@ -69,9 +70,9 @@ def test_provider_label_isolation():
 
     exposition = collector.generate_exposition().decode("utf-8")
 
-    assert "gateway_provider_attempts_total{provider=\"nvidia_nim\"} 5.0" in exposition
-    assert "gateway_provider_attempts_total{provider=\"openrouter\"} 10.0" in exposition
-    assert "gateway_provider_attempts_total{provider=\"ollama\"} 3.0" in exposition
+    assert 'gateway_provider_attempts_total{provider="nvidia_nim"} 5.0' in exposition
+    assert 'gateway_provider_attempts_total{provider="openrouter"} 10.0' in exposition
+    assert 'gateway_provider_attempts_total{provider="ollama"} 3.0' in exposition
 
 
 def test_observability_event_subscription_updates_prometheus():
@@ -104,6 +105,7 @@ def test_observability_event_subscription_updates_prometheus():
             latency_ms=1500.0,
             input_tokens=15,
             output_tokens=45,
+            team_id="prom-team",
         )
     )
 
@@ -119,11 +121,12 @@ def test_observability_event_subscription_updates_prometheus():
 
     exposition = prometheus_metrics.generate_exposition().decode("utf-8")
 
-    assert "gateway_requests_total{status=\"started\",team_id=\"prom-team\"}" in exposition
-    assert "gateway_provider_attempts_total{provider=\"openrouter\"}" in exposition
-    assert "gateway_tokens_total{provider=\"openrouter\",type=\"input\"}" in exposition
-    assert "gateway_tokens_total{provider=\"openrouter\",type=\"output\"}" in exposition
-    assert "gateway_stream_ttft_seconds_bucket" in exposition
+    assert 'gateway_requests_total{status="success",team_id="prom-team"}' in exposition
+    assert 'gateway_requests_in_flight{team_id="prom-team"} 0.0' in exposition
+    assert 'gateway_provider_attempts_total{provider="openrouter"}' in exposition
+    assert 'gateway_tokens_total{provider="openrouter",type="input"}' in exposition
+    assert 'gateway_tokens_total{provider="openrouter",type="output"}' in exposition
+    assert 'gateway_stream_ttft_seconds_bucket{le="0.25",provider="openrouter"} 1.0' in exposition
 
 
 def test_metrics_endpoint_prometheus_and_json():

@@ -23,11 +23,13 @@ class ProviderSuccessEvent(GatewayEvent):
     latency_ms: float
     input_tokens: int
     output_tokens: int
+    team_id: str = "default"
 
 @dataclass
 class ProviderFailureEvent(GatewayEvent):
     provider: str
     error: str
+    team_id: str = "default"
 
 @dataclass
 class RetryEvent(GatewayEvent):
@@ -44,6 +46,7 @@ class FallbackEvent(GatewayEvent):
 class RequestFinishedEvent(GatewayEvent):
     provider: str
     total_latency_ms: float
+    team_id: str = "default"
 
 @dataclass
 class StreamFirstTokenEvent(GatewayEvent):
