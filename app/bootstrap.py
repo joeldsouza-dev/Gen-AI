@@ -61,9 +61,9 @@ def create_gateway_router():
         circuit_breakers=circuit_breakers,
         rate_limiter=rate_limiter,
         default_chain=[
-            ProviderName.OLLAMA,
+            ProviderName.NVIDIA_NIM,
             ProviderName.OPENROUTER,
-            ProviderName.NVIDIA_NIM
+            ProviderName.OLLAMA,
         ],
         max_retries=2,
     )
