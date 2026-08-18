@@ -31,7 +31,7 @@ import time
 import httpx
 
 from app.config import settings
-from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName
+from app.core.models import GatewayRequest, GatewayResponse, ProviderError, ProviderName, StreamChunk
 from app.providers.base import BaseProvider
 
 
@@ -136,6 +136,74 @@ class OpenRouterProvider(BaseProvider):
                     f"Unexpected response format from OpenRouter API: {data}",
                     retryable=False,
                 ) from exc
+
+    async def call_stream(self, request: GatewayRequest):
+        import json
+        messages = []
+
+        if request.system_prompt:
+            messages.append({"role": "system", "content": request.system_prompt})
+
+        messages.append({"role": "user", "content": request.prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "stream": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost",
+            "X-OpenRouter-Title": "LLM Gateway",
+        }
+
+        try:
+            client = httpx.AsyncClient()
+            req = client.build_request("POST", f"{self.base_url}/chat/completions", headers=headers, json=payload, timeout=60.0)
+            response = await client.send(req, stream=True)
+
+            if response.status_code >= 400:
+                body = await response.aread()
+                await response.aclose()
+                await client.aclose()
+                raise ProviderError(
+                    f"OpenRouter returned HTTP {response.status_code}: {body.decode()}",
+                    retryable=response.status_code == 429 or response.status_code >= 500,
+                )
+
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    data = json.loads(data_str)
+                    choices = data.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content", "")
+                        finish_reason = choices[0].get("finish_reason")
+                        if content or finish_reason:
+                            yield StreamChunk(
+                                text=content,
+                                provider_used=self.name,
+                                model_used=data.get("model", self.model),
+                                is_final=finish_reason is not None,
+                                finish_reason=finish_reason,
+                            )
+                except Exception:
+                    continue
+
+            await response.aclose()
+            await client.aclose()
+
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise ProviderError(f"Error streaming from OpenRouter API: {exc}", retryable=True) from exc
     
     async def health_check(self) -> bool:
             headers = {

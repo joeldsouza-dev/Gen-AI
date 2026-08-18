@@ -15,10 +15,12 @@ Responsibilities of route_request():
 """
 
 import asyncio
+import random
+import time
 from datetime import datetime
-from typing import Dict, List
+from typing import AsyncGenerator, Dict, List
 
-from app.core.circuit_breaker import CircuitBreaker
+from app.core.circuit_breaker import CircuitBreaker, CircuitState
 from app.core.models import (
     GatewayRequest,
     GatewayResponse,
@@ -32,6 +34,7 @@ from app.observability.events import (
     ProviderAttemptEvent,
     ProviderFailureEvent,
     ProviderSuccessEvent,
+    RequestFinishedEvent,
     RetryEvent,
 )
 from app.providers.base import BaseProvider
@@ -55,14 +58,14 @@ class GatewayRouter:
     async def route_request(
         self,
         request: GatewayRequest,
-        request_id: str,
+        request_id: str = "default-request-id",
     ) -> GatewayResponse:
 
         # --------------------------------------------------
-        # 1. Rate limit check
+        # 1. Rate limit check (per-team)
         # --------------------------------------------------
 
-        allowed = await self.rate_limiter.allow()
+        allowed = await self.rate_limiter.allow(team_id=request.team_id)
 
         if not allowed:
             raise RateLimitError(
@@ -180,7 +183,7 @@ class GatewayRouter:
                         break
 
                     # --------------------------------------------------
-                    # 3e. Retry same provider
+                    # 3e. Retry same provider with Exponential Backoff & Jitter
                     # --------------------------------------------------
 
                     event_emitter.emit(
@@ -193,7 +196,12 @@ class GatewayRouter:
                         )
                     )
 
-                    await asyncio.sleep(0.1)
+                    # Exponential backoff with randomized jitter
+                    base_delay = 0.05
+                    max_delay = 1.0
+                    backoff = min(max_delay, base_delay * (2 ** attempt))
+                    jittered_delay = random.uniform(0.01, backoff)
+                    await asyncio.sleep(jittered_delay)
 
             # --------------------------------------------------
             # 4. Provider exhausted → fallback
@@ -216,6 +224,117 @@ class GatewayRouter:
         # --------------------------------------------------
         # 5. Every provider failed
         # --------------------------------------------------
+
+        raise RuntimeError("No available providers.")
+
+    async def route_stream(
+        self,
+        request: GatewayRequest,
+        request_id: str = "default-request-id",
+    ) -> AsyncGenerator[str, None]:
+        start_time = time.perf_counter()
+
+        # 1. Rate limit check (per-team)
+        allowed = await self.rate_limiter.allow(team_id=request.team_id)
+
+        if not allowed:
+            raise RateLimitError(
+                f"Rate limit exceeded for team {request.team_id}",
+                retryable=False,
+            )
+
+        # 2. Build provider chain
+        provider_chain = self._build_chain(request)
+
+        # 3. Try providers in order
+        for index, provider_name in enumerate(provider_chain):
+            breaker = self.circuit_breakers[provider_name]
+
+            if not breaker.allow_request():
+                continue
+
+            provider = self.providers[provider_name]
+            was_fallback = index > 0
+            first_chunk_yielded = False
+            token_count = 0
+
+            event_emitter.emit(
+                ProviderAttemptEvent(
+                    request_id=request_id,
+                    timestamp=datetime.now(),
+                    event_type="provider_attempt",
+                    provider=provider_name.value,
+                    attempt=1,
+                )
+            )
+
+            try:
+                # Pre-first-chunk connection & streaming loop
+                generator = provider.call_stream(request)
+                async for chunk in generator:
+                    if not first_chunk_yielded:
+                        first_chunk_yielded = True
+                        breaker.record_success()
+
+                    if chunk.text:
+                        token_count += 1
+
+                    chunk.was_fallback = was_fallback
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+
+                if first_chunk_yielded:
+                    latency_ms = (time.perf_counter() - start_time) * 1000
+                    event_emitter.emit(
+                        ProviderSuccessEvent(
+                            request_id=request_id,
+                            timestamp=datetime.now(),
+                            event_type="provider_success",
+                            provider=provider_name.value,
+                            latency_ms=latency_ms,
+                            input_tokens=len(request.prompt.split()),
+                            output_tokens=token_count,
+                        )
+                    )
+                    event_emitter.emit(
+                        RequestFinishedEvent(
+                            request_id=request_id,
+                            timestamp=datetime.now(),
+                            event_type="request_finished",
+                            provider=provider_name.value,
+                            total_latency_ms=latency_ms,
+                        )
+                    )
+                    yield "data: [DONE]\n\n"
+                    return
+
+            except ProviderError as error:
+                # If failure occurs BEFORE first chunk was sent, record failure and try next provider!
+                if not first_chunk_yielded:
+                    breaker.record_failure()
+                    event_emitter.emit(
+                        ProviderFailureEvent(
+                            request_id=request_id,
+                            timestamp=datetime.now(),
+                            event_type="provider_failure",
+                            provider=provider_name.value,
+                            error=str(error),
+                        )
+                    )
+                    if index < len(provider_chain) - 1:
+                        next_provider = provider_chain[index + 1]
+                        event_emitter.emit(
+                            FallbackEvent(
+                                request_id=request_id,
+                                timestamp=datetime.now(),
+                                event_type="fallback",
+                                from_provider=provider_name.value,
+                                to_provider=next_provider.value,
+                            )
+                        )
+                    continue
+                else:
+                    # Post-first-chunk failure: cannot switch provider mid-stream!
+                    break
 
         raise RuntimeError("No available providers.")
 

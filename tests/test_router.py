@@ -13,12 +13,12 @@ from app.core.models import ProviderError
 
 
 class RejectingRateLimiter:
-    async def allow(self, tokens_requested: int = 1) -> bool:
+    async def allow(self, team_id: str = "default", tokens_requested: int = 1) -> bool:
         return False
 
     
 class AllowingRateLimiter:
-    async def allow(self, tokens_requested: int = 1) -> bool:
+    async def allow(self, team_id: str = "default", tokens_requested: int = 1) -> bool:
         return True
 
 

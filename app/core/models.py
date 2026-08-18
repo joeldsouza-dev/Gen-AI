@@ -31,9 +31,21 @@ class GatewayRequest(BaseModel):
     system_prompt: Optional[str] = None
     max_tokens: int = 512
     temperature: float = 0.7
+    stream: bool = False
     # Which provider tier to prefer. The router decides the actual fallback chain —
     # this is a *hint*, not a guarantee, since the whole point is automatic failover.
     preferred_provider: Optional[ProviderName] = None
+
+
+class StreamChunk(BaseModel):
+    """Standardized single token/chunk yielded during a streaming response."""
+
+    text: str
+    provider_used: ProviderName
+    model_used: str
+    is_final: bool = False
+    finish_reason: Optional[str] = None
+    was_fallback: bool = False
 
 
 class GatewayResponse(BaseModel):

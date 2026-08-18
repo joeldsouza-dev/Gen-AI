@@ -17,8 +17,9 @@ code all over the codebase instead of just adding one new file.
 """
 
 from abc import ABC, abstractmethod
+from typing import AsyncGenerator
 
-from app.core.models import GatewayRequest, GatewayResponse
+from app.core.models import GatewayRequest, GatewayResponse, StreamChunk
 
 
 class BaseProvider(ABC):
@@ -39,14 +40,18 @@ class BaseProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def call_stream(self, request: GatewayRequest) -> AsyncGenerator[StreamChunk, None]:
+        """
+        Stream token chunks from this provider, yielding StreamChunk objects.
+        Must raise `ProviderError` if initial connection fails before emitting chunks.
+        """
+        raise NotImplementedError
+        yield  # Make it a generator syntax
+
+    @abstractmethod
     async def health_check(self) -> bool:
         """
         A cheap, fast call used by the circuit breaker's half-open state to
         test whether a previously-failing provider has recovered.
-
-        This should NOT be a full completion request — that's slow and
-        costs tokens. Think about what the lightest possible "is this
-        provider alive" check looks like for each API (e.g. a models-list
-        endpoint, or a minimal 1-token request).
         """
         raise NotImplementedError

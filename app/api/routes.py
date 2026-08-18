@@ -2,6 +2,7 @@ import time
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.core.models import (
     GatewayRequest,
@@ -38,6 +39,15 @@ async def chat_completions(
     )
 
     gateway_router = request.app.state.gateway_router
+
+    if gateway_request.stream:
+        return StreamingResponse(
+            gateway_router.route_stream(
+                gateway_request,
+                request_id,
+            ),
+            media_type="text/event-stream",
+        )
 
     try:
         response = await gateway_router.route_request(

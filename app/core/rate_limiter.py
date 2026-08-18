@@ -48,67 +48,51 @@ import asyncio
 import pytest
 
 class InMemoryTokenBucket:
-    """Stage 1: implement this fully before touching Redis."""
+    """Per-team in-memory token bucket rate limiter."""
 
     def __init__(self, capacity: int, refill_rate_per_second: float):
         self.capacity = capacity
         self.refill_rate = refill_rate_per_second
-        self.tokens = capacity
-        self.last_refill_time = time.monotonic()
-        # TODO(you): what state do you need to track? (hint: current token
-        # count, and the last time you computed a refill)
+        self.buckets: dict[str, dict] = {}
 
-    async def allow(self, tokens_requested: int = 1) -> bool:
+    def _get_bucket(self, team_id: str) -> dict:
+        if team_id not in self.buckets:
+            self.buckets[team_id] = {
+                "tokens": float(self.capacity),
+                "last_refill_time": time.monotonic(),
+            }
+        return self.buckets[team_id]
+
+    async def allow(self, team_id: str = "default", tokens_requested: int = 1) -> bool:
         """
-        Return True and deduct tokens if enough are available, else return
-        False and deduct nothing.
+        Return True and deduct tokens if enough are available for team_id,
+        else return False and deduct nothing.
         """
-        # TODO(you): implement the refill-then-check-then-deduct logic
-        # described in the module docstring.
+        bucket = self._get_bucket(team_id)
         current_time = time.monotonic()
-        elapsed_time = current_time - self.last_refill_time
+        elapsed_time = current_time - bucket["last_refill_time"]
         refill_amount = elapsed_time * self.refill_rate
-        self.tokens = min(self.capacity, self.tokens + refill_amount)  
-        self.last_refill_time = current_time
+        bucket["tokens"] = min(float(self.capacity), bucket["tokens"] + refill_amount)
+        bucket["last_refill_time"] = current_time
 
-        if self.tokens >= tokens_requested:
-            self.tokens -= tokens_requested
+        if bucket["tokens"] >= tokens_requested:
+            bucket["tokens"] -= tokens_requested
             return True
         else:
             return False
-        
-
-    @pytest.mark.asyncio
-    async def test_concurrent_load_respects_limit():
-        bucket = InMemoryTokenBucket(
-            capacity=20,
-            refill_rate_per_second=0,
-        )
-
-        async def make_request():
-            return await bucket.allow()
-
-        requests = [
-            make_request()
-            for _ in range(50)
-        ]
-
-        results = await asyncio.gather(*requests)
-
-        assert sum(results) == 20
-    
 
 
 class RedisTokenBucket:
-    """Stage 2: only start this once InMemoryTokenBucket's tests pass."""
+    """Per-team Redis token bucket rate limiter using Lua script for atomicity."""
+
     LUA_SCRIPT = """
         local key = KEYS[1]
         local capacity = tonumber(ARGV[1])
         local refill_rate = tonumber(ARGV[2])
         local tokens_requested = tonumber(ARGV[3])
 
-        local redis_time= redis.call('TIME')
-        local current_time = tonumber(redis_time[1]) + tonumber(redis_time[2]) /1000000
+        local redis_time = redis.call('TIME')
+        local current_time = tonumber(redis_time[1]) + tonumber(redis_time[2]) / 1000000
         local bucket = redis.call(
             "HMGET",
             key,
@@ -123,7 +107,6 @@ class RedisTokenBucket:
             last_refill_time = current_time
         end
         local elapsed = current_time - last_refill_time
-
         local refilled_tokens = elapsed * refill_rate
 
         tokens = math.min(
@@ -147,26 +130,30 @@ class RedisTokenBucket:
         )
 
         return allowed
-    """  
+    """
 
-    def __init__(self, redis_client, key: str, capacity: int, refill_rate_per_second: float):
+    def __init__(
+        self,
+        redis_client,
+        key: str = "rate_limit",
+        capacity: int = 60,
+        refill_rate_per_second: float = 1.0,
+    ):
         self.redis = redis_client
-        self.key = key
+        self.key_prefix = key
         self.capacity = capacity
         self.refill_rate = refill_rate_per_second
 
-    async def allow(self, tokens_requested: int = 1) -> bool:
+    async def allow(self, team_id: str = "default", tokens_requested: int = 1) -> bool:
+        redis_key = f"{self.key_prefix}:{team_id}" if ":" not in self.key_prefix or team_id != "default" else self.key_prefix
         result = await self.redis.eval(
-        self.LUA_SCRIPT,
-        1,
-        self.key,
-        self.capacity,
-        self.refill_rate,
-        tokens_requested,
+            self.LUA_SCRIPT,
+            1,
+            redis_key,
+            self.capacity,
+            self.refill_rate,
+            tokens_requested,
         )
-        return bool(result)  # Redis returns 1 for True, 0 for False
-        # TODO(you): implement atomically (Lua script or WATCH/MULTI/EXEC).
-        # This must give the same correctness guarantee as the in-memory
-        # version, but under concurrent access from multiple processes.
-        raise NotImplementedError("Implement RedisTokenBucket.allow()")
+        return bool(result)
+
     

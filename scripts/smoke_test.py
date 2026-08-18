@@ -12,7 +12,7 @@ fields show it fell back to OpenRouter (or Ollama).
 
 import httpx
 
-GATEWAY_URL = "http://localhost:8000/v1/completions"
+GATEWAY_URL = "http://localhost:8000/v1/chat/completions"
 
 
 def main():
